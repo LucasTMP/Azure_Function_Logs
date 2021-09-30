@@ -1,0 +1,80 @@
+name: Pipeline_CI_CD
+
+on: 
+  push:
+    branches:
+      - dev
+      - main
+      
+  pull_request:
+    branches:
+      - dev
+      - main
+      
+env:
+  AZURE_FUNCTIONAPP_NAME: desafio4equipe2
+  AZURE_FUNCTIONAPP_PACKAGE_PATH: src\Observabilidade.Function\published
+  CONFIGURATION: Release
+  DOTNET_CORE_VERSION: 5.0.x
+  WORKING_DIRECTORY: src\Observabilidade.Function
+  DOTNET_CORE_VERSION_INPROC: 3.1.x
+
+
+jobs:
+  horusec-security:
+    name: horusec-security
+    runs-on: ubuntu-latest
+    steps:
+    - name: Preparação dos arquivos do projeto para o scan
+      uses: actions/checkout@v2
+    - name: Verificação de segurança com o Horusec
+      run: |
+        curl -fsSL https://raw.githubusercontent.com/ZupIT/horusec/main/deployments/scripts/install.sh | bash -s latest
+        horusec start -p="./" --ignore="**/Dockerfile" --ignore="**/README.md" -e="true"
+  
+  function-testes:
+    name: Ambiente de Testes
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        dotnet-version: ['6.0.x']
+    steps:
+      - name: Enviar repositório e configurar o ambiente
+        uses: actions/checkout@v2
+      - name: Instalar o .NET Core SDK ${{ matrix.dotnet-version }} (dotnet)
+        uses: actions/setup-dotnet@v1.7.2
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+          include-prerelease: true
+      - name: Executar os testes de unidade e integração
+        run: dotnet test src/Observabilidade.Function.Tests/Observabilidade.Function.Tests.csproj --verbosity normal
+  
+  build-and-deploy:
+    name: build-and-deploy
+    runs-on: windows-latest
+    needs: [horusec-security, function-testes]
+    steps:
+    - uses: actions/checkout@master
+    - name: Setup .NET Core
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: ${{ env.DOTNET_CORE_VERSION }}
+    - name: Setup .NET Core (for inproc extensions)
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: ${{ env.DOTNET_CORE_VERSION_INPROC }}
+    - name: Restore
+      run: dotnet restore "${{ env.WORKING_DIRECTORY }}"
+    - name: Build
+      run: dotnet build "${{ env.WORKING_DIRECTORY }}" --configuration ${{ env.CONFIGURATION }} --no-restore
+    - name: Publish
+      run: dotnet publish "${{ env.WORKING_DIRECTORY }}" --configuration ${{ env.CONFIGURATION }} --no-build --output "${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}"
+    - name: Deploy to Azure Function App
+      uses: Azure/functions-action@v1
+      with:
+        app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
+        publish-profile: ${{ secrets.DESAFIO4EQUIPE2_FFFF }}
+        package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+  
+
